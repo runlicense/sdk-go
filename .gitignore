@@ -1,0 +1,16 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Tool config
+.claude/
+
+# RunLicense runtime files
+.runlicense_token
+.runlicense_token.tmp
+
+# Go
+*.exe
+*.test
+*.out
