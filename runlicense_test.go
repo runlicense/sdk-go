@@ -1185,3 +1185,113 @@ func TestSignNonceInvalidKey(t *testing.T) {
 	_, err := signNonce("test", "!!!invalid!!!")
 	assertErrorCode(t, err, ErrInvalidPublicKey)
 }
+
+// ── SetLicenseJSON override tests ─────────────────────────────────
+
+func TestSetLicenseJSONOverridesFileDiscovery(t *testing.T) {
+	sk, pk := genKeypair(t)
+	license := makeActiveLicense(t, sk)
+
+	ns := "testorg/embedded"
+	SetLicenseJSON(ns, license)
+	defer func() {
+		licenseOverridesMu.Lock()
+		delete(licenseOverrides, ns)
+		licenseOverridesMu.Unlock()
+	}()
+
+	// Should succeed without any license file on disk
+	payload, err := ActivateOffline(ns, pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.LicenseID != "lic_test_123" {
+		t.Errorf("unexpected license_id: %s", payload.LicenseID)
+	}
+}
+
+func TestSetLicenseJSONWithPhoneHome(t *testing.T) {
+	sk, pk := genKeypair(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Nonce string `json:"nonce"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		tokenStr := makeValidationToken(t, sk, "lic_test_123", req.Nonce, "2099-12-31T23:59:59Z")
+		json.NewEncoder(w).Encode(map[string]string{"token": tokenStr})
+	}))
+	defer server.Close()
+
+	payloadStr := makePayloadJSON("active", nil, strPtr(server.URL), nil)
+	license := makeLicense(t, sk, payloadStr)
+
+	ns := "testorg/embedded-phonehome"
+	SetLicenseJSON(ns, license)
+	defer func() {
+		licenseOverridesMu.Lock()
+		delete(licenseOverrides, ns)
+		licenseOverridesMu.Unlock()
+	}()
+
+	payload, err := Activate(context.Background(), ns, pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.LicenseID != "lic_test_123" {
+		t.Error("wrong license_id")
+	}
+}
+
+func TestSetLicenseJSONInvalidLicenseStillFails(t *testing.T) {
+	_, pk := genKeypair(t)
+
+	ns := "testorg/bad-embedded"
+	SetLicenseJSON(ns, "not valid json")
+	defer func() {
+		licenseOverridesMu.Lock()
+		delete(licenseOverrides, ns)
+		licenseOverridesMu.Unlock()
+	}()
+
+	_, err := ActivateOffline(ns, pk)
+	assertErrorCode(t, err, ErrInvalidJSON)
+}
+
+func TestSetLicenseJSONWrongKeyStillFails(t *testing.T) {
+	sk, _ := genKeypair(t)
+	_, pk2 := genKeypair(t)
+	license := makeActiveLicense(t, sk)
+
+	ns := "testorg/wrongkey-embedded"
+	SetLicenseJSON(ns, license)
+	defer func() {
+		licenseOverridesMu.Lock()
+		delete(licenseOverrides, ns)
+		licenseOverridesMu.Unlock()
+	}()
+
+	_, err := ActivateOffline(ns, pk2)
+	assertErrorCode(t, err, ErrSignatureMismatch)
+}
+
+func TestNoOverrideFallsBackToFileDiscovery(t *testing.T) {
+	sk, pk := genKeypair(t)
+	licenseJSON := makeActiveLicense(t, sk)
+
+	dir := t.TempDir()
+	ns := "testorg/fallback"
+	licenseDir := filepath.Join(dir, ns)
+	os.MkdirAll(licenseDir, 0755)
+	os.WriteFile(filepath.Join(licenseDir, "license.json"), []byte(licenseJSON), 0644)
+
+	t.Setenv("RUNLICENSE_DIR", dir)
+	// No override set — should discover from disk
+	payload, err := ActivateOffline(ns, pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.LicenseID != "lic_test_123" {
+		t.Error("wrong license_id")
+	}
+}

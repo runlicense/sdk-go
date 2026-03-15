@@ -48,8 +48,39 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// licenseOverrides stores embedded license JSON keyed by namespace.
+// Application developers call SetLicenseJSON to register these before
+// package init() functions call Activate.
+var (
+	licenseOverrides   = make(map[string]string)
+	licenseOverridesMu sync.RWMutex
+)
+
+// SetLicenseJSON registers an embedded license JSON string for a namespace.
+// When Activate or ActivateOffline is called for this namespace, the
+// registered JSON is used instead of searching the filesystem.
+//
+// This enables single-binary distribution: application developers embed
+// the license file at compile time and register it before licensed packages
+// initialize.
+//
+// Example:
+//
+//	//go:embed runlicense/acme/image-processor/license.json
+//	var licenseJSON string
+//
+//	func init() {
+//	    runlicense.SetLicenseJSON("acme/image-processor", licenseJSON)
+//	}
+func SetLicenseJSON(namespace, licenseJSON string) {
+	licenseOverridesMu.Lock()
+	defer licenseOverridesMu.Unlock()
+	licenseOverrides[namespace] = licenseJSON
+}
 
 // Activate verifies a license by namespace with full phone-home validation.
 //
@@ -62,6 +93,15 @@ import (
 //
 // The context controls the phone-home HTTP request timeout and cancellation.
 func Activate(ctx context.Context, namespace, publicKeyB64 string) (*LicensePayload, error) {
+	// Check for embedded license override
+	licenseOverridesMu.RLock()
+	override, hasOverride := licenseOverrides[namespace]
+	licenseOverridesMu.RUnlock()
+
+	if hasOverride {
+		return ActivateFromJSON(ctx, override, publicKeyB64)
+	}
+
 	jsonData, licensePath, err := loadLicenseFile(namespace)
 	if err != nil {
 		return nil, err
@@ -98,6 +138,15 @@ func Activate(ctx context.Context, namespace, publicKeyB64 string) (*LicensePayl
 // It performs offline signature and expiry checks only.
 // No network calls are made, so no context is required.
 func ActivateOffline(namespace, publicKeyB64 string) (*LicensePayload, error) {
+	// Check for embedded license override
+	licenseOverridesMu.RLock()
+	override, hasOverride := licenseOverrides[namespace]
+	licenseOverridesMu.RUnlock()
+
+	if hasOverride {
+		return ActivateFromJSONOffline(override, publicKeyB64)
+	}
+
 	jsonData, _, err := loadLicenseFile(namespace)
 	if err != nil {
 		return nil, err

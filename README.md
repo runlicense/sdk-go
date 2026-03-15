@@ -162,6 +162,35 @@ The `license.json` file is provided by RunLicense when you purchase or activate 
 
 You should not modify this file — any changes will cause signature verification to fail.
 
+### Embedding licenses for single-binary distribution
+
+If you need to distribute a single executable without separate license files, you can embed the license into the binary at compile time using `//go:embed` and `SetLicenseJSON`:
+
+```go
+package main
+
+import (
+    "context"
+    _ "embed"
+    "log"
+
+    runlicense "github.com/runlicense/sdk-go"
+)
+
+//go:embed runlicense/acme/image-processor/license.json
+var licenseJSON string
+
+func init() {
+    // Register the embedded license before the licensed package initializes.
+    // Activate will use this instead of searching the filesystem.
+    runlicense.SetLicenseJSON("acme/image-processor", licenseJSON)
+}
+```
+
+When `SetLicenseJSON` is called for a namespace, `Activate` and `ActivateOffline` use the registered JSON instead of file discovery. The license is still fully verified — signature, status, expiry, and phone-home all apply as normal.
+
+**Important:** Go `init()` functions run in dependency order — your application's `init()` runs after all imported packages' `init()` functions. If a licensed package calls `Activate` in its own `init()`, you need to register the license in a **separate package** that the licensed package imports, or use a different initialization pattern. See the Go specification on [package initialization](https://go.dev/ref/spec#Package_initialization) for details.
+
 ## API Reference
 
 ### Functions
@@ -172,8 +201,9 @@ You should not modify this file — any changes will cause signature verificatio
 | `ActivateOffline(namespace, key)` | No | No | Yes | Offline-only signature and expiry checks |
 | `ActivateFromJSON(ctx, json, key)` | Yes | Yes | No | Verify from JSON string, no token caching or grace period |
 | `ActivateFromJSONOffline(json, key)` | No | No | No | Offline verification from JSON string |
+| `SetLicenseJSON(namespace, json)` | — | — | — | Register embedded license; `Activate`/`ActivateOffline` will use it instead of file discovery |
 
-All functions return `(*LicensePayload, error)`.
+All `Activate*` functions return `(*LicensePayload, error)`. `SetLicenseJSON` has no return value.
 
 ### `LicensePayload`
 
