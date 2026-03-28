@@ -17,6 +17,15 @@ type LicensePayload struct {
 	ActivationURL   *string         `json:"activation_url"`
 }
 
+// ActivationResult is returned by all Activate functions. It always contains
+// the verified LicensePayload. When phone-home validation was performed, the
+// activation-specific fields (ExpiresAt, ActivationsRemaining) are also populated.
+type ActivationResult struct {
+	License              *LicensePayload
+	ExpiresAt            string `json:"expires_at"`
+	ActivationsRemaining int    `json:"activations_remaining"`
+}
+
 // ValidationToken is a signed validation token returned by the phone-home server.
 type ValidationToken struct {
 	LicenseID string `json:"license_id"`

@@ -18,11 +18,11 @@
 //	var publicKey string
 //
 //	func init() {
-//	    license, err := runlicense.Activate(context.Background(), "myorg/mypackage", publicKey)
+//	    result, err := runlicense.Activate(context.Background(), "myorg/mypackage", publicKey)
 //	    if err != nil {
 //	        log.Fatal(err)
 //	    }
-//	    fmt.Println("Licensed to customer:", license.CustomerID)
+//	    fmt.Println("Licensed to customer:", result.License.CustomerID)
 //	}
 //
 // # License File Discovery
@@ -92,7 +92,7 @@ func SetLicenseJSON(namespace, licenseJSON string) {
 // public key. Use Go's embed directive to embed this from keys/runlicense.key.
 //
 // The context controls the phone-home HTTP request timeout and cancellation.
-func Activate(ctx context.Context, namespace, publicKeyB64 string) (*LicensePayload, error) {
+func Activate(ctx context.Context, namespace, publicKeyB64 string) (*ActivationResult, error) {
 	// Check for embedded license override
 	licenseOverridesMu.RLock()
 	override, hasOverride := licenseOverrides[namespace]
@@ -116,28 +116,32 @@ func Activate(ctx context.Context, namespace, publicKeyB64 string) (*LicensePayl
 		return nil, err
 	}
 
+	result := &ActivationResult{License: payload}
+
 	if payload.ActivationURL != nil {
 		cacheDir := filepath.Dir(licensePath)
-		_, rawToken, err := phoneHome(ctx, payload, publicKeyB64)
+		phResult, err := phoneHome(ctx, payload, publicKeyB64)
 		if err == nil {
-			cacheToken(cacheDir, rawToken)
+			cacheToken(cacheDir, phResult.RawToken)
+			result.ExpiresAt = phResult.ExpiresAt
+			result.ActivationsRemaining = phResult.ActivationsRemaining
 		} else {
 			// Grace period: try cached token
 			if loadCachedToken(cacheDir, publicKeyB64, payload.LicenseID) != nil {
-				return payload, nil
+				return result, nil
 			}
 			return nil, err
 		}
 	}
 
-	return payload, nil
+	return result, nil
 }
 
 // ActivateOffline verifies a license by namespace without phone-home validation.
 //
 // It performs offline signature and expiry checks only.
 // No network calls are made, so no context is required.
-func ActivateOffline(namespace, publicKeyB64 string) (*LicensePayload, error) {
+func ActivateOffline(namespace, publicKeyB64 string) (*ActivationResult, error) {
 	// Check for embedded license override
 	licenseOverridesMu.RLock()
 	override, hasOverride := licenseOverrides[namespace]
@@ -161,7 +165,7 @@ func ActivateOffline(namespace, publicKeyB64 string) (*LicensePayload, error) {
 		return nil, err
 	}
 
-	return payload, nil
+	return &ActivationResult{License: payload}, nil
 }
 
 // ActivateFromJSON verifies a license from a JSON string directly.
@@ -173,7 +177,7 @@ func ActivateOffline(namespace, publicKeyB64 string) (*LicensePayload, error) {
 // Note: because there is no license file path, no validation token is cached.
 // This means there is no grace period — if phone-home fails, activation fails
 // immediately. Use ActivateFromJSONOffline if you need offline-only verification.
-func ActivateFromJSON(ctx context.Context, licenseJSON, publicKeyB64 string) (*LicensePayload, error) {
+func ActivateFromJSON(ctx context.Context, licenseJSON, publicKeyB64 string) (*ActivationResult, error) {
 	payload, err := verifySignature(licenseJSON, publicKeyB64)
 	if err != nil {
 		return nil, err
@@ -183,18 +187,23 @@ func ActivateFromJSON(ctx context.Context, licenseJSON, publicKeyB64 string) (*L
 		return nil, err
 	}
 
+	result := &ActivationResult{License: payload}
+
 	if payload.ActivationURL != nil {
-		if _, _, err := phoneHome(ctx, payload, publicKeyB64); err != nil {
+		phResult, err := phoneHome(ctx, payload, publicKeyB64)
+		if err != nil {
 			return nil, err
 		}
+		result.ExpiresAt = phResult.ExpiresAt
+		result.ActivationsRemaining = phResult.ActivationsRemaining
 	}
 
-	return payload, nil
+	return result, nil
 }
 
 // ActivateFromJSONOffline verifies a license from a JSON string without
 // phone-home validation.
-func ActivateFromJSONOffline(licenseJSON, publicKeyB64 string) (*LicensePayload, error) {
+func ActivateFromJSONOffline(licenseJSON, publicKeyB64 string) (*ActivationResult, error) {
 	payload, err := verifySignature(licenseJSON, publicKeyB64)
 	if err != nil {
 		return nil, err
@@ -204,7 +213,7 @@ func ActivateFromJSONOffline(licenseJSON, publicKeyB64 string) (*LicensePayload,
 		return nil, err
 	}
 
-	return payload, nil
+	return &ActivationResult{License: payload}, nil
 }
 
 // validateNamespace checks that a namespace doesn't contain path traversal.

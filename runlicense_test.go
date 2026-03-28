@@ -349,12 +349,12 @@ func TestAllowedFeaturesParsed(t *testing.T) {
 	sk, pk := genKeypair(t)
 	features := json.RawMessage(`{"pro":true,"max_users":100}`)
 	license := makeActiveLicenseWithFeatures(t, sk, features)
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var f map[string]any
-	json.Unmarshal(payload.AllowedFeatures, &f)
+	json.Unmarshal(result.License.AllowedFeatures, &f)
 	if f["pro"] != true {
 		t.Error("expected pro=true")
 	}
@@ -366,12 +366,12 @@ func TestAllowedFeaturesParsed(t *testing.T) {
 func TestNullFeaturesAccepted(t *testing.T) {
 	sk, pk := genKeypair(t)
 	license := makeActiveLicense(t, sk)
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(payload.AllowedFeatures) != "null" && payload.AllowedFeatures != nil {
-		t.Errorf("expected null features, got %s", payload.AllowedFeatures)
+	if string(result.License.AllowedFeatures) != "null" && result.License.AllowedFeatures != nil {
+		t.Errorf("expected null features, got %s", result.License.AllowedFeatures)
 	}
 }
 
@@ -379,12 +379,12 @@ func TestUsageLimitParsed(t *testing.T) {
 	sk, pk := genKeypair(t)
 	payloadStr := `{"license_id":"lic_test","product_id":"prod_test","customer_id":"cust_test","status":"active","expiry_date":null,"allowed_features":null,"usage_limit":5000,"token_ttl":null,"activation_url":null}`
 	license := makeLicense(t, sk, payloadStr)
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.UsageLimit == nil || *payload.UsageLimit != 5000 {
-		t.Errorf("expected usage_limit=5000, got %v", payload.UsageLimit)
+	if result.License.UsageLimit == nil || *result.License.UsageLimit != 5000 {
+		t.Errorf("expected usage_limit=5000, got %v", result.License.UsageLimit)
 	}
 }
 
@@ -406,14 +406,14 @@ func TestActivationURLParsed(t *testing.T) {
 func TestFullPipelineValidLicense(t *testing.T) {
 	sk, pk := genKeypair(t)
 	license := makeActiveLicenseWithExpiry(t, sk, "2099-12-31T23:59:59Z")
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.Status != "active" {
+	if result.License.Status != "active" {
 		t.Error("expected active")
 	}
-	if payload.ExpiryDate == nil || *payload.ExpiryDate != "2099-12-31T23:59:59Z" {
+	if result.License.ExpiryDate == nil || *result.License.ExpiryDate != "2099-12-31T23:59:59Z" {
 		t.Error("unexpected expiry")
 	}
 }
@@ -514,12 +514,12 @@ func TestLoadAndVerifyLicenseFromDisk(t *testing.T) {
 	os.WriteFile(filepath.Join(licenseDir, "license.json"), []byte(licenseJSON), 0644)
 
 	t.Setenv("RUNLICENSE_DIR", dir)
-	payload, err := ActivateOffline(ns, pk)
+	result, err := ActivateOffline(ns, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.LicenseID != "lic_test_123" {
-		t.Errorf("unexpected license_id: %s", payload.LicenseID)
+	if result.License.LicenseID != "lic_test_123" {
+		t.Errorf("unexpected license_id: %s", result.License.LicenseID)
 	}
 }
 
@@ -560,7 +560,7 @@ func TestMultipleNamespacesCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r1.LicenseID != "lic_test_123" {
+	if r1.License.LicenseID != "lic_test_123" {
 		t.Error("wrong license_id for license1")
 	}
 
@@ -568,7 +568,7 @@ func TestMultipleNamespacesCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r2.LicenseID != "lic_other" {
+	if r2.License.LicenseID != "lic_other" {
 		t.Error("wrong license_id for license2")
 	}
 
@@ -923,11 +923,11 @@ func TestUnicodeInPayloadFields(t *testing.T) {
 	sk, pk := genKeypair(t)
 	payloadStr := `{"license_id":"lic_test","product_id":"prod_unicode","customer_id":"cust_test","status":"active","expiry_date":null,"allowed_features":{"name":"Acme Corp™"},"usage_limit":null,"token_ttl":null,"activation_url":null}`
 	license := makeLicense(t, sk, payloadStr)
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.ProductID != "prod_unicode" {
+	if result.License.ProductID != "prod_unicode" {
 		t.Error("wrong product_id")
 	}
 }
@@ -940,12 +940,12 @@ func TestLargeFeatureObject(t *testing.T) {
 	}
 	featJSON, _ := json.Marshal(features)
 	license := makeActiveLicenseWithFeatures(t, sk, json.RawMessage(featJSON))
-	payload, err := ActivateFromJSONOffline(license, pk)
+	result, err := ActivateFromJSONOffline(license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var f map[string]bool
-	json.Unmarshal(payload.AllowedFeatures, &f)
+	json.Unmarshal(result.License.AllowedFeatures, &f)
 	if len(f) != 100 {
 		t.Errorf("expected 100 features, got %d", len(f))
 	}
@@ -988,19 +988,25 @@ func TestActivateWithPhoneHome(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 
 		tokenStr := makeValidationToken(t, sk, "lic_test_123", req.Nonce, "2099-12-31T23:59:59Z")
-		json.NewEncoder(w).Encode(map[string]string{"token": tokenStr})
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"token": tokenStr, "expires_at": "2099-12-31T23:59:59Z", "activations_remaining": 9995}})
 	}))
 	defer server.Close()
 
 	payloadStr := makePayloadJSON("active", strPtr("2099-12-31T23:59:59Z"), strPtr(server.URL), nil)
 	license := makeLicense(t, sk, payloadStr)
 
-	payload, err := ActivateFromJSON(context.Background(), license, pk)
+	result, err := ActivateFromJSON(context.Background(), license, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.LicenseID != "lic_test_123" {
+	if result.License.LicenseID != "lic_test_123" {
 		t.Error("wrong license_id")
+	}
+	if result.ActivationsRemaining != 9995 {
+		t.Errorf("expected activations_remaining=9995, got %d", result.ActivationsRemaining)
+	}
+	if result.ExpiresAt != "2099-12-31T23:59:59Z" {
+		t.Errorf("expected expires_at=2099-12-31T23:59:59Z, got %s", result.ExpiresAt)
 	}
 }
 
@@ -1021,7 +1027,7 @@ func TestActivatePhoneHomeServerRejects(t *testing.T) {
 
 func TestActivatePhoneHomeInvalidToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"token": "invalid.token"})
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"token": "invalid.token"}})
 	}))
 	defer server.Close()
 
@@ -1075,11 +1081,11 @@ func TestActivateWithGracePeriod(t *testing.T) {
 	os.WriteFile(filepath.Join(licenseDir, "license.json"), []byte(license), 0644)
 
 	t.Setenv("RUNLICENSE_DIR", dir)
-	payload, err := Activate(context.Background(), ns, pk)
+	result, err := Activate(context.Background(), ns, pk)
 	if err != nil {
 		t.Fatalf("grace period should have succeeded: %v", err)
 	}
-	if payload.LicenseID != "lic_test_123" {
+	if result.License.LicenseID != "lic_test_123" {
 		t.Error("wrong license_id")
 	}
 }
@@ -1201,12 +1207,12 @@ func TestSetLicenseJSONOverridesFileDiscovery(t *testing.T) {
 	}()
 
 	// Should succeed without any license file on disk
-	payload, err := ActivateOffline(ns, pk)
+	result, err := ActivateOffline(ns, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.LicenseID != "lic_test_123" {
-		t.Errorf("unexpected license_id: %s", payload.LicenseID)
+	if result.License.LicenseID != "lic_test_123" {
+		t.Errorf("unexpected license_id: %s", result.License.LicenseID)
 	}
 }
 
@@ -1219,7 +1225,7 @@ func TestSetLicenseJSONWithPhoneHome(t *testing.T) {
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		tokenStr := makeValidationToken(t, sk, "lic_test_123", req.Nonce, "2099-12-31T23:59:59Z")
-		json.NewEncoder(w).Encode(map[string]string{"token": tokenStr})
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"token": tokenStr, "expires_at": "2099-12-31T23:59:59Z", "activations_remaining": 9995}})
 	}))
 	defer server.Close()
 
@@ -1234,11 +1240,11 @@ func TestSetLicenseJSONWithPhoneHome(t *testing.T) {
 		licenseOverridesMu.Unlock()
 	}()
 
-	payload, err := Activate(context.Background(), ns, pk)
+	result, err := Activate(context.Background(), ns, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.LicenseID != "lic_test_123" {
+	if result.License.LicenseID != "lic_test_123" {
 		t.Error("wrong license_id")
 	}
 }
@@ -1287,11 +1293,11 @@ func TestNoOverrideFallsBackToFileDiscovery(t *testing.T) {
 
 	t.Setenv("RUNLICENSE_DIR", dir)
 	// No override set — should discover from disk
-	payload, err := ActivateOffline(ns, pk)
+	result, err := ActivateOffline(ns, pk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.LicenseID != "lic_test_123" {
+	if result.License.LicenseID != "lic_test_123" {
 		t.Error("wrong license_id")
 	}
 }

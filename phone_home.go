@@ -25,22 +25,29 @@ const phoneHomeTimeout = 30 * time.Second
 // maxResponseSize is the maximum size of a phone-home response body (1 MB).
 const maxResponseSize = 1 << 20
 
+// phoneHomeResult holds the full result of a phone-home call.
+type phoneHomeResult struct {
+	Token                *ValidationToken
+	RawToken             string
+	ExpiresAt            string
+	ActivationsRemaining int
+}
+
 // phoneHome performs phone-home validation against the activation server.
-// Returns the validated token and the raw signed token string for caching.
-func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string) (*ValidationToken, string, error) {
+func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string) (*phoneHomeResult, error) {
 	if payload.ActivationURL == nil {
-		return nil, "", &LicenseError{Code: ErrNoActivationURL}
+		return nil, &LicenseError{Code: ErrNoActivationURL}
 	}
 	activationURL := *payload.ActivationURL
 
 	nonce, err := generateNonce()
 	if err != nil {
-		return nil, "", &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
+		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 
 	nonceSig, err := signNonce(nonce, publicKeyB64)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	body, _ := json.Marshal(map[string]string{
@@ -50,46 +57,55 @@ func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, activationURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, "", &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
+		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: phoneHomeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
+		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return nil, "", &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
+		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", &LicenseError{
+		return nil, &LicenseError{
 			Code:    ErrServerRejected,
 			Message: fmt.Sprintf("HTTP %d — %s", resp.StatusCode, string(respBody)),
 		}
 	}
 
 	var respJSON struct {
-		Token string `json:"token"`
+		Data struct {
+			Token                string `json:"token"`
+			ExpiresAt            string `json:"expires_at"`
+			ActivationsRemaining int    `json:"activations_remaining"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &respJSON); err != nil {
-		return nil, "", &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
+		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 
-	if respJSON.Token == "" {
-		return nil, "", &LicenseError{Code: ErrInvalidValidationToken}
+	if respJSON.Data.Token == "" {
+		return nil, &LicenseError{Code: ErrInvalidValidationToken}
 	}
 
-	token, err := verifyToken(respJSON.Token, publicKeyB64, nonce, payload.LicenseID)
+	token, err := verifyToken(respJSON.Data.Token, publicKeyB64, nonce, payload.LicenseID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	return token, respJSON.Token, nil
+	return &phoneHomeResult{
+		Token:                token,
+		RawToken:             respJSON.Data.Token,
+		ExpiresAt:            respJSON.Data.ExpiresAt,
+		ActivationsRemaining: respJSON.Data.ActivationsRemaining,
+	}, nil
 }
 
 // verifyToken verifies a signed validation token from the server.
