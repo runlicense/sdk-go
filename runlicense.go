@@ -92,48 +92,69 @@ func SetLicenseJSON(namespace, licenseJSON string) {
 // public key. Use Go's embed directive to embed this from keys/runlicense.key.
 //
 // The context controls the phone-home HTTP request timeout and cancellation.
-func Activate(ctx context.Context, namespace, publicKeyB64 string) (*ActivationResult, error) {
+func Activate(ctx context.Context, namespace, publicKeyB64 string, opts ...Option) (*ActivationResult, error) {
+	o := applyOptions(opts)
+	o.logInfo("[runlicense] starting activation", "namespace", namespace)
+
 	// Check for embedded license override
 	licenseOverridesMu.RLock()
 	override, hasOverride := licenseOverrides[namespace]
 	licenseOverridesMu.RUnlock()
 
 	if hasOverride {
-		return ActivateFromJSON(ctx, override, publicKeyB64)
+		o.logDebug("[runlicense] using embedded license override", "namespace", namespace)
+		return ActivateFromJSON(ctx, override, publicKeyB64, opts...)
 	}
 
+	o.logDebug("[runlicense] discovering license file", "namespace", namespace)
 	jsonData, licensePath, err := loadLicenseFile(namespace)
 	if err != nil {
+		o.logWarn("[runlicense] license file not found", "namespace", namespace, "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] license file found", "path", licensePath)
 
+	o.logDebug("[runlicense] verifying signature")
 	payload, err := verifySignature(jsonData, publicKeyB64)
 	if err != nil {
+		o.logWarn("[runlicense] signature verification failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] signature verified", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 
+	o.logDebug("[runlicense] checking status and expiry")
 	if err := verifyStatusAndExpiry(payload); err != nil {
+		o.logWarn("[runlicense] status/expiry check failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] license is active", "status", payload.Status, "expiry_date", payload.ExpiryDate)
 
 	result := &ActivationResult{License: payload}
 
 	if payload.ActivationURL != nil {
+		o.logDebug("[runlicense] starting phone-home validation", "url", *payload.ActivationURL)
 		cacheDir := filepath.Dir(licensePath)
-		phResult, err := phoneHome(ctx, payload, publicKeyB64)
+		phResult, err := phoneHome(ctx, payload, publicKeyB64, o)
 		if err == nil {
 			cacheToken(cacheDir, phResult.RawToken)
 			result.ExpiresAt = phResult.ExpiresAt
 			result.ActivationsRemaining = phResult.ActivationsRemaining
+			o.logDebug("[runlicense] phone-home succeeded", "expires_at", phResult.ExpiresAt, "activations_remaining", phResult.ActivationsRemaining)
 		} else {
+			o.logWarn("[runlicense] phone-home failed, checking cached token", "error", err)
 			// Grace period: try cached token
 			if loadCachedToken(cacheDir, publicKeyB64, payload.LicenseID) != nil {
+				o.logInfo("[runlicense] using cached validation token (grace period)")
 				return result, nil
 			}
+			o.logWarn("[runlicense] no valid cached token available")
 			return nil, err
 		}
+	} else {
+		o.logDebug("[runlicense] no activation URL configured, skipping phone-home")
 	}
 
+	o.logInfo("[runlicense] activation successful", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 	return result, nil
 }
 
@@ -141,30 +162,43 @@ func Activate(ctx context.Context, namespace, publicKeyB64 string) (*ActivationR
 //
 // It performs offline signature and expiry checks only.
 // No network calls are made, so no context is required.
-func ActivateOffline(namespace, publicKeyB64 string) (*ActivationResult, error) {
+func ActivateOffline(namespace, publicKeyB64 string, opts ...Option) (*ActivationResult, error) {
+	o := applyOptions(opts)
+	o.logInfo("[runlicense] starting offline activation", "namespace", namespace)
+
 	// Check for embedded license override
 	licenseOverridesMu.RLock()
 	override, hasOverride := licenseOverrides[namespace]
 	licenseOverridesMu.RUnlock()
 
 	if hasOverride {
-		return ActivateFromJSONOffline(override, publicKeyB64)
+		o.logDebug("[runlicense] using embedded license override", "namespace", namespace)
+		return ActivateFromJSONOffline(override, publicKeyB64, opts...)
 	}
 
-	jsonData, _, err := loadLicenseFile(namespace)
+	o.logDebug("[runlicense] discovering license file", "namespace", namespace)
+	jsonData, licensePath, err := loadLicenseFile(namespace)
 	if err != nil {
+		o.logWarn("[runlicense] license file not found", "namespace", namespace, "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] license file found", "path", licensePath)
 
+	o.logDebug("[runlicense] verifying signature")
 	payload, err := verifySignature(jsonData, publicKeyB64)
 	if err != nil {
+		o.logWarn("[runlicense] signature verification failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] signature verified", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 
+	o.logDebug("[runlicense] checking status and expiry")
 	if err := verifyStatusAndExpiry(payload); err != nil {
+		o.logWarn("[runlicense] status/expiry check failed", "error", err)
 		return nil, err
 	}
 
+	o.logInfo("[runlicense] offline activation successful", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 	return &ActivationResult{License: payload}, nil
 }
 
@@ -177,42 +211,66 @@ func ActivateOffline(namespace, publicKeyB64 string) (*ActivationResult, error) 
 // Note: because there is no license file path, no validation token is cached.
 // This means there is no grace period — if phone-home fails, activation fails
 // immediately. Use ActivateFromJSONOffline if you need offline-only verification.
-func ActivateFromJSON(ctx context.Context, licenseJSON, publicKeyB64 string) (*ActivationResult, error) {
+func ActivateFromJSON(ctx context.Context, licenseJSON, publicKeyB64 string, opts ...Option) (*ActivationResult, error) {
+	o := applyOptions(opts)
+	o.logInfo("[runlicense] starting activation from JSON")
+
+	o.logDebug("[runlicense] verifying signature")
 	payload, err := verifySignature(licenseJSON, publicKeyB64)
 	if err != nil {
+		o.logWarn("[runlicense] signature verification failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] signature verified", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 
+	o.logDebug("[runlicense] checking status and expiry")
 	if err := verifyStatusAndExpiry(payload); err != nil {
+		o.logWarn("[runlicense] status/expiry check failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] license is active", "status", payload.Status, "expiry_date", payload.ExpiryDate)
 
 	result := &ActivationResult{License: payload}
 
 	if payload.ActivationURL != nil {
-		phResult, err := phoneHome(ctx, payload, publicKeyB64)
+		o.logDebug("[runlicense] starting phone-home validation", "url", *payload.ActivationURL)
+		phResult, err := phoneHome(ctx, payload, publicKeyB64, o)
 		if err != nil {
+			o.logWarn("[runlicense] phone-home failed", "error", err)
 			return nil, err
 		}
 		result.ExpiresAt = phResult.ExpiresAt
 		result.ActivationsRemaining = phResult.ActivationsRemaining
+		o.logDebug("[runlicense] phone-home succeeded", "expires_at", phResult.ExpiresAt, "activations_remaining", phResult.ActivationsRemaining)
+	} else {
+		o.logDebug("[runlicense] no activation URL configured, skipping phone-home")
 	}
 
+	o.logInfo("[runlicense] activation successful", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 	return result, nil
 }
 
 // ActivateFromJSONOffline verifies a license from a JSON string without
 // phone-home validation.
-func ActivateFromJSONOffline(licenseJSON, publicKeyB64 string) (*ActivationResult, error) {
+func ActivateFromJSONOffline(licenseJSON, publicKeyB64 string, opts ...Option) (*ActivationResult, error) {
+	o := applyOptions(opts)
+	o.logInfo("[runlicense] starting offline activation from JSON")
+
+	o.logDebug("[runlicense] verifying signature")
 	payload, err := verifySignature(licenseJSON, publicKeyB64)
 	if err != nil {
+		o.logWarn("[runlicense] signature verification failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] signature verified", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 
+	o.logDebug("[runlicense] checking status and expiry")
 	if err := verifyStatusAndExpiry(payload); err != nil {
+		o.logWarn("[runlicense] status/expiry check failed", "error", err)
 		return nil, err
 	}
 
+	o.logInfo("[runlicense] offline activation successful", "license_id", payload.LicenseID, "customer_id", payload.CustomerID)
 	return &ActivationResult{License: payload}, nil
 }
 

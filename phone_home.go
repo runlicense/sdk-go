@@ -34,12 +34,13 @@ type phoneHomeResult struct {
 }
 
 // phoneHome performs phone-home validation against the activation server.
-func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string) (*phoneHomeResult, error) {
+func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string, o *options) (*phoneHomeResult, error) {
 	if payload.ActivationURL == nil {
 		return nil, &LicenseError{Code: ErrNoActivationURL}
 	}
 	activationURL := *payload.ActivationURL
 
+	o.logDebug("[runlicense] generating nonce for phone-home")
 	nonce, err := generateNonce()
 	if err != nil {
 		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
@@ -55,6 +56,7 @@ func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string
 		"nonce_signature": nonceSig,
 	})
 
+	o.logDebug("[runlicense] sending phone-home request", "url", activationURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, activationURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
@@ -64,9 +66,11 @@ func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string
 	client := &http.Client{Timeout: phoneHomeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
+		o.logWarn("[runlicense] phone-home request failed", "error", err)
 		return nil, &LicenseError{Code: ErrPhoneHomeFailed, Message: err.Error()}
 	}
 	defer resp.Body.Close()
+	o.logDebug("[runlicense] phone-home response received", "status", resp.StatusCode)
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
@@ -74,6 +78,7 @@ func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		o.logWarn("[runlicense] server rejected license", "status", resp.StatusCode, "body", string(respBody))
 		return nil, &LicenseError{
 			Code:    ErrServerRejected,
 			Message: fmt.Sprintf("HTTP %d — %s", resp.StatusCode, string(respBody)),
@@ -95,10 +100,13 @@ func phoneHome(ctx context.Context, payload *LicensePayload, publicKeyB64 string
 		return nil, &LicenseError{Code: ErrInvalidValidationToken}
 	}
 
+	o.logDebug("[runlicense] verifying validation token")
 	token, err := verifyToken(respJSON.Data.Token, publicKeyB64, nonce, payload.LicenseID)
 	if err != nil {
+		o.logWarn("[runlicense] validation token verification failed", "error", err)
 		return nil, err
 	}
+	o.logDebug("[runlicense] validation token verified")
 
 	return &phoneHomeResult{
 		Token:                token,

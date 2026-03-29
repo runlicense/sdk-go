@@ -6,12 +6,12 @@ License verification SDK for Go packages using the [RunLicense](https://runlicen
 
 The RunLicense Go SDK lets package developers add license verification to their libraries. It handles:
 
-- **Ed25519 signature verification** — ensures the license file hasn't been tampered with
-- **Status and expiry checks** — confirms the license is active and not expired
-- **Namespaced license discovery** — multiple licensed packages can coexist in the same application
-- **Phone-home validation** — server-side license verification with offline grace periods
+- **Ed25519 signature verification** - ensures the license file hasn't been tampered with
+- **Status and expiry checks** - confirms the license is active and not expired
+- **Namespaced license discovery** - multiple licensed packages can coexist in the same application
+- **Phone-home validation** - server-side license verification with offline grace periods
 
-Zero external dependencies — uses only the Go standard library.
+Zero external dependencies - uses only the Go standard library.
 
 ## For Package Developers
 
@@ -35,7 +35,7 @@ your-module/
 └── main.go
 ```
 
-The key is a single line containing the base64-encoded Ed25519 public key. This is the same key shown in your RunLicense dashboard. It gets embedded into your compiled binary at build time via `//go:embed` — it is never read from disk at runtime.
+The key is a single line containing the base64-encoded Ed25519 public key. This is the same key shown in your RunLicense dashboard. It gets embedded into your compiled binary at build time via `//go:embed` - it is never read from disk at runtime.
 
 **Important:** Do not add `keys/runlicense.key` to your `.gitignore`. It must be included in your repository so downstream consumers can build your module.
 
@@ -84,7 +84,7 @@ If you don't need phone-home validation, use `ActivateOffline`:
 license, err := runlicense.ActivateOffline("acme/image-processor", publicKey)
 ```
 
-> **Security warning:** Without phone-home, the SDK can only verify licenses offline using the signature and expiry date. There is no server-side revocation — if you need to revoke a license, the SDK has no way to know. An end user could also roll back their system clock to bypass expiry checks. Phone-home is the primary enforcement mechanism and should always be enabled in production.
+> **Security warning:** Without phone-home, the SDK can only verify licenses offline using the signature and expiry date. There is no server-side revocation - if you need to revoke a license, the SDK has no way to know. An end user could also roll back their system clock to bypass expiry checks. Phone-home is the primary enforcement mechanism and should always be enabled in production.
 
 #### With raw JSON
 
@@ -95,7 +95,7 @@ data, _ := os.ReadFile("/custom/path/license.json")
 license, err := runlicense.ActivateFromJSON(context.Background(), string(data), publicKey)
 ```
 
-This performs the same verification (including phone-home) but without filesystem-based token caching. This means there is no grace period — if phone-home fails, activation fails immediately. Use `ActivateFromJSONOffline` if you need offline-only verification from a JSON string.
+This performs the same verification (including phone-home) but without filesystem-based token caching. This means there is no grace period - if phone-home fails, activation fails immediately. Use `ActivateFromJSONOffline` if you need offline-only verification from a JSON string.
 
 #### Feature gating
 
@@ -137,15 +137,15 @@ my-application/
 └── ...
 ```
 
-Each licensed package finds its own `license.json` independently — they don't interfere with each other.
+Each licensed package finds its own `license.json` independently - they don't interfere with each other.
 
 ### Discovery order
 
 The SDK searches for `runlicense/<namespace>/license.json` in these locations, using the first match:
 
-1. **`RUNLICENSE_DIR` environment variable** — if set, looks for `$RUNLICENSE_DIR/<namespace>/license.json`
-2. **Executable directory** — next to the compiled binary
-3. **Current working directory** — where you run the application from
+1. **`RUNLICENSE_DIR` environment variable** - if set, looks for `$RUNLICENSE_DIR/<namespace>/license.json`
+2. **Executable directory** - next to the compiled binary
+3. **Current working directory** - where you run the application from
 
 For deployed applications, it's common to place the `runlicense/` folder alongside the binary or set `RUNLICENSE_DIR` to a fixed path.
 
@@ -160,7 +160,7 @@ The `license.json` file is provided by RunLicense when you purchase or activate 
 }
 ```
 
-You should not modify this file — any changes will cause signature verification to fail.
+You should not modify this file - any changes will cause signature verification to fail.
 
 ### Embedding licenses for single-binary distribution
 
@@ -187,9 +187,140 @@ func init() {
 }
 ```
 
-When `SetLicenseJSON` is called for a namespace, `Activate` and `ActivateOffline` use the registered JSON instead of file discovery. The license is still fully verified — signature, status, expiry, and phone-home all apply as normal.
+When `SetLicenseJSON` is called for a namespace, `Activate` and `ActivateOffline` use the registered JSON instead of file discovery. The license is still fully verified - signature, status, expiry, and phone-home all apply as normal.
 
-**Important:** Go `init()` functions run in dependency order — your application's `init()` runs after all imported packages' `init()` functions. If a licensed package calls `Activate` in its own `init()`, you need to register the license in a **separate package** that the licensed package imports, or use a different initialization pattern. See the Go specification on [package initialization](https://go.dev/ref/spec#Package_initialization) for details.
+**Important:** Go `init()` functions run in dependency order - your application's `init()` runs after all imported packages' `init()` functions. If a licensed package calls `Activate` in its own `init()`, you need to register the license in a **separate package** that the licensed package imports, or use a different initialization pattern. See the Go specification on [package initialization](https://go.dev/ref/spec#Package_initialization) for details.
+
+## Logging
+
+By default, the SDK operates silently. You can enable verbose logging by passing a `*slog.Logger` via the `WithLogger` option. This is useful during development and testing to see exactly what the SDK is doing at each step of the verification pipeline.
+
+### Enabling logging
+
+```go
+import "log/slog"
+
+// Use the default slog logger
+result, err := runlicense.Activate(ctx, "acme/image-processor", publicKey,
+    runlicense.WithLogger(slog.Default()),
+)
+```
+
+### Using a custom logger
+
+You can configure any `*slog.Logger` - for example, to set the log level or output format:
+
+```go
+// JSON output at debug level
+logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+result, err := runlicense.Activate(ctx, "acme/image-processor", publicKey,
+    runlicense.WithLogger(logger),
+)
+```
+
+### Log levels
+
+The SDK uses three log levels:
+
+| Level | What is logged |
+|---|---|
+| `Debug` | Every verification step: file discovery, signature check, status/expiry validation, phone-home request/response, token verification, cache operations |
+| `Info` | Activation start and success (including license ID and customer ID), grace period fallback |
+| `Warn` | All failures: file not found, signature mismatch, expired license, phone-home errors, server rejection |
+
+To see all SDK output, set your logger's minimum level to `slog.LevelDebug`. At the default `slog.LevelInfo`, you'll see activation start/success and grace period events.
+
+### Example output
+
+With debug-level logging enabled, a successful activation produces:
+
+```
+INFO  [runlicense] starting activation                namespace=acme/image-processor
+DEBUG [runlicense] discovering license file            namespace=acme/image-processor
+DEBUG [runlicense] license file found                  path=/app/runlicense/acme/image-processor/license.json
+DEBUG [runlicense] verifying signature
+DEBUG [runlicense] signature verified                  license_id=lic_abc123 customer_id=cust_456
+DEBUG [runlicense] checking status and expiry
+DEBUG [runlicense] license is active                   status=active expiry_date=2027-01-01T00:00:00Z
+DEBUG [runlicense] starting phone-home validation      url=https://activate.example.com/v1/validate
+DEBUG [runlicense] generating nonce for phone-home
+DEBUG [runlicense] sending phone-home request          url=https://activate.example.com/v1/validate
+DEBUG [runlicense] phone-home response received        status=200
+DEBUG [runlicense] verifying validation token
+DEBUG [runlicense] validation token verified
+DEBUG [runlicense] phone-home succeeded                expires_at=2027-01-02T00:00:00Z activations_remaining=5
+INFO  [runlicense] activation successful               license_id=lic_abc123 customer_id=cust_456
+```
+
+When phone-home fails but a cached token is available:
+
+```
+WARN  [runlicense] phone-home failed, checking cached token  error=phone-home validation failed: dial tcp: ...
+INFO  [runlicense] using cached validation token (grace period)
+```
+
+### Works with all Activate functions
+
+All four activation functions accept `WithLogger`:
+
+```go
+runlicense.Activate(ctx, ns, key, runlicense.WithLogger(logger))
+runlicense.ActivateOffline(ns, key, runlicense.WithLogger(logger))
+runlicense.ActivateFromJSON(ctx, json, key, runlicense.WithLogger(logger))
+runlicense.ActivateFromJSONOffline(json, key, runlicense.WithLogger(logger))
+```
+
+### For package developers
+
+If you're building a licensed package, you can accept a logger from your consumers and pass it through:
+
+```go
+package imageprocessor
+
+import (
+    "context"
+    _ "embed"
+    "log/slog"
+
+    runlicense "github.com/runlicense/sdk-go"
+)
+
+//go:embed keys/runlicense.key
+var publicKey string
+
+type Option func(*options)
+type options struct{ logger *slog.Logger }
+
+func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l } }
+
+func New(ctx context.Context, opts ...Option) (*Client, error) {
+    var o options
+    for _, fn := range opts { fn(&o) }
+
+    var rlOpts []runlicense.Option
+    if o.logger != nil {
+        rlOpts = append(rlOpts, runlicense.WithLogger(o.logger))
+    }
+
+    result, err := runlicense.Activate(ctx, "acme/image-processor", publicKey, rlOpts...)
+    if err != nil {
+        return nil, err
+    }
+    return &Client{license: result}, nil
+}
+```
+
+This lets the end-user application control logging:
+
+```go
+// Application code - opt in to verbose SDK logging
+client, err := imageprocessor.New(ctx,
+    imageprocessor.WithLogger(slog.Default()),
+)
+```
 
 ## API Reference
 
@@ -197,13 +328,19 @@ When `SetLicenseJSON` is called for a namespace, `Activate` and `ActivateOffline
 
 | Function | Context | Phone-Home | File Discovery | Description |
 |---|---|---|---|---|
-| `Activate(ctx, namespace, key)` | Yes | Yes | Yes | Full verification with server-side validation and grace period |
-| `ActivateOffline(namespace, key)` | No | No | Yes | Offline-only signature and expiry checks |
-| `ActivateFromJSON(ctx, json, key)` | Yes | Yes | No | Verify from JSON string, no token caching or grace period |
-| `ActivateFromJSONOffline(json, key)` | No | No | No | Offline verification from JSON string |
-| `SetLicenseJSON(namespace, json)` | — | — | — | Register embedded license; `Activate`/`ActivateOffline` will use it instead of file discovery |
+| `Activate(ctx, namespace, key, ...Option)` | Yes | Yes | Yes | Full verification with server-side validation and grace period |
+| `ActivateOffline(namespace, key, ...Option)` | No | No | Yes | Offline-only signature and expiry checks |
+| `ActivateFromJSON(ctx, json, key, ...Option)` | Yes | Yes | No | Verify from JSON string, no token caching or grace period |
+| `ActivateFromJSONOffline(json, key, ...Option)` | No | No | No | Offline verification from JSON string |
+| `SetLicenseJSON(namespace, json)` | - | - | - | Register embedded license; `Activate`/`ActivateOffline` will use it instead of file discovery |
 
-All `Activate*` functions return `(*LicensePayload, error)`. `SetLicenseJSON` has no return value.
+All `Activate*` functions return `(*ActivationResult, error)`. `SetLicenseJSON` has no return value.
+
+### Options
+
+| Option | Description |
+|---|---|
+| `WithLogger(l *slog.Logger)` | Enable verbose logging using the provided logger. See [Logging](#logging) for details. |
 
 ### `LicensePayload`
 
@@ -217,7 +354,7 @@ Returned on successful verification:
 | `Status` | `string` | License status (always `"active"` after verification) |
 | `ExpiryDate` | `*string` | RFC 3339 expiry date, if set |
 | `AllowedFeatures` | `json.RawMessage` | Feature flags/limits as raw JSON, if configured |
-| `UsageLimit` | `*uint64` | Usage limit metadata, if configured (informational — not enforced by the SDK) |
+| `UsageLimit` | `*uint64` | Usage limit metadata, if configured (informational - not enforced by the SDK) |
 | `TokenTTL` | `*uint64` | Validation token TTL in seconds |
 | `ActivationURL` | `*string` | Phone-home endpoint URL |
 
@@ -256,13 +393,13 @@ if err != nil {
 | `ErrInvalidJSON` | License JSON is malformed |
 | `ErrInvalidPublicKey` | The embedded public key is invalid |
 | `ErrInvalidSignature` | The signature encoding in the license is invalid |
-| `ErrSignatureMismatch` | Signature does not match — license may be tampered |
+| `ErrSignatureMismatch` | Signature does not match - license may be tampered |
 | `ErrLicenseNotActive` | License status is not `"active"` |
 | `ErrLicenseExpired` | License expiry date has passed |
 | `ErrNoActivationURL` | No activation URL configured for phone-home |
 | `ErrPhoneHomeFailed` | Phone-home request failed (network error, timeout) |
 | `ErrInvalidValidationToken` | Server returned an invalid validation token |
-| `ErrValidationTokenNonceMismatch` | Token nonce mismatch — possible replay attack |
+| `ErrValidationTokenNonceMismatch` | Token nonce mismatch - possible replay attack |
 | `ErrValidationTokenExpired` | Validation token has expired |
 | `ErrValidationTokenLicenseMismatch` | Token license ID does not match |
 | `ErrServerRejected` | Server explicitly rejected the license |
@@ -271,7 +408,7 @@ if err != nil {
 
 - **Ed25519 signatures** ensure license files cannot be forged or modified without the private key
 - **Namespace validation** prevents path traversal attacks (`..`, `.`, `\`, empty segments are rejected)
-- **Cached tokens are cryptographically verified** on reload — writing a forged `.runlicense_token` file does not bypass validation
+- **Cached tokens are cryptographically verified** on reload - writing a forged `.runlicense_token` file does not bypass validation
 - **Phone-home validation** with cryptographic nonce challenges prevents replay attacks
 - **Response size limits** prevent denial-of-service via oversized server responses
 - **Context support** allows callers to set timeouts and cancel phone-home requests
